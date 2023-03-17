@@ -1,0 +1,12 @@
+apiVersion: redis.openstack.org/v1beta1
+kind: Redis
+metadata:
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/instance: redis-sample
+    app.kubernetes.io/part-of: infra-operator
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: infra-operator
+  name: redis-sample
+spec:
+  replicas: 1
