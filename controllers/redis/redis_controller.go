@@ -18,7 +18,6 @@ package redis
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,10 +28,7 @@ import (
 
 	"github.com/go-logr/logr"
 	redisv1beta1 "github.com/openstack-k8s-operators/infra-operator/apis/redis/v1beta1"
-	"github.com/openstack-k8s-operators/lib-common/modules/common/configmap"
-	"github.com/openstack-k8s-operators/lib-common/modules/common/env"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/helper"
-	"github.com/openstack-k8s-operators/lib-common/modules/common/util"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -116,8 +112,6 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		cl := condition.CreateList(
 			// endpoint for adoption redirect
 			condition.UnknownCondition(condition.ExposeServiceReadyCondition, condition.InitReason, condition.ExposeServiceReadyInitMessage),
-			// configmap generation
-			condition.UnknownCondition(condition.ServiceConfigReadyCondition, condition.InitReason, condition.ServiceConfigReadyInitMessage),
 			// redis pods ready
 			condition.UnknownCondition(condition.DeploymentReadyCondition, condition.InitReason, condition.DeploymentReadyInitMessage),
 		)
@@ -131,20 +125,6 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	//
 	// Create/Update all the resources associated to this Redis instance
 	//
-
-	// Redis config maps
-	configMapVars := make(map[string]env.Setter)
-	err = r.generateConfigMaps(ctx, helper, instance, &configMapVars)
-	if err != nil {
-		instance.Status.Conditions.Set(condition.FalseCondition(
-			condition.ServiceConfigReadyCondition,
-			condition.ErrorReason,
-			condition.SeverityWarning,
-			condition.ServiceConfigReadyErrorMessage,
-			err.Error()))
-		return ctrl.Result{}, fmt.Errorf("error calculating configmap hash: %v", err)
-	}
-	instance.Status.Conditions.MarkTrue(condition.ServiceConfigReadyCondition, condition.ServiceConfigReadyMessage)
 
 	// Service to expose Redis pods
 	commonsvc := commonservice.NewService(redis.Service(instance), map[string]string{}, time.Duration(5)*time.Second)
@@ -177,38 +157,6 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	}
 
 	return ctrl.Result{}, nil
-}
-
-// generateConfigMaps returns the config map resource for a redis instance
-func (r *RedisReconciler) generateConfigMaps(
-	ctx context.Context,
-	h *helper.Helper,
-	instance *redisv1beta1.Redis,
-	envVars *map[string]env.Setter,
-) error {
-	templateParameters := make(map[string]interface{})
-	customData := make(map[string]string)
-
-	cms := []util.Template{
-		// ConfigMap
-		{
-			Name:          fmt.Sprintf("%s-redis-config-data", instance.Name),
-			Namespace:     instance.Namespace,
-			Type:          util.TemplateTypeConfig,
-			InstanceType:  instance.Kind,
-			CustomData:    customData,
-			ConfigOptions: templateParameters,
-			Labels:        map[string]string{},
-		},
-	}
-
-	err := configmap.EnsureConfigMaps(ctx, h, instance, cms, envVars)
-	if err != nil {
-		util.LogErrorForObject(h, err, "Unable to retrieve or create config maps", instance)
-		return err
-	}
-
-	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
