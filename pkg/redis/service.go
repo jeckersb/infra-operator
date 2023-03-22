@@ -7,6 +7,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
+// Service exposes redis pods for a redis CR
 func Service(m *redisv1beta1.Redis) *corev1.Service {
 	labels := labels.GetLabels(m, "redis", map[string]string{
 		"owner": "infra-operator",

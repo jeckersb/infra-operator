@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
+// Deployment returns a Deployment resource for the Redis CR
 func Deployment(r *redisv1beta1.Redis) *appsv1.Deployment {
 	matchls := map[string]string{
 		"app":   "redis",

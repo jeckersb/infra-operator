@@ -40,8 +40,8 @@ import (
 	commonservice "github.com/openstack-k8s-operators/lib-common/modules/common/service"
 )
 
-// RedisReconciler reconciles a Redis object
-type RedisReconciler struct {
+// Reconciler reconciles a Redis object
+type Reconciler struct {
 	client.Client
 	Kclient kubernetes.Interface
 	Log     logr.Logger
@@ -61,7 +61,7 @@ type RedisReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete;
 
 // Reconcile - Redis
-func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, _err error) {
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, _err error) {
 	_ = log.FromContext(ctx)
 
 	// Fetch the Redis instance
@@ -160,7 +160,7 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *RedisReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&redisv1beta1.Redis{}).
 		Owns(&appsv1.Deployment{}).
