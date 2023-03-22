@@ -143,7 +143,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "Memcached")
 		os.Exit(1)
 	}
-	if err = (&rediscontrollers.RedisReconciler{
+	if err = (&rediscontrollers.Reconciler{
 		Client:  mgr.GetClient(),
 		Kclient: kclient,
 		Log:     ctrl.Log.WithName("controllers").WithName("Redis"),
