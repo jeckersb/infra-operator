@@ -44,9 +44,37 @@ spec:
           spec:
             description: TransportURLSpec defines the desired state of TransportURL
             properties:
+              configurePermissions:
+                description: Configure permissions for user on vhost.  If omitted,
+                  defaults to ".*" (all permissions)
+                type: string
+              quorumQueues:
+                default: false
+                description: Whether to default to using quorum queues on this vhost.
+                  Defaults to false.  If no Vhost is provided for this TransportURL
+                  instance, the value of QuorumQueues is ignored.
+                type: boolean
               rabbitmqClusterName:
                 description: RabbitmqClusterName the name of the Rabbitmq cluster
                   which to configure the transport URL
+                type: string
+              readPermissions:
+                description: Read permissions for user on vhost.  If omitted, defaults
+                  to ".*" (all permissions)
+                type: string
+              user:
+                description: User to use for the transport URL.  This will create
+                  the RabbitMQ user if needed.  If omitted, this will use the default
+                  RabbitMQ user.
+                type: string
+              vhost:
+                description: Virtual host to use for the transport URL.  This will
+                  create the RabbitMQ virtual host if needed.  If omitted, uses the
+                  default "/" vhost.
+                type: string
+              writePermissions:
+                description: Write permissions for user on vhost.  If omitted, defaults
+                  to ".*" (all permissions)
                 type: string
             required:
             - rabbitmqClusterName

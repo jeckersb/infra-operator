@@ -28,12 +28,14 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	rabbitmqv1beta1 "github.com/openstack-k8s-operators/infra-operator/apis/rabbitmq/v1beta1"
 	condition "github.com/openstack-k8s-operators/lib-common/modules/common/condition"
 	helper "github.com/openstack-k8s-operators/lib-common/modules/common/helper"
 	oko_secret "github.com/openstack-k8s-operators/lib-common/modules/common/secret"
 	rabbitmqv1 "github.com/rabbitmq/cluster-operator/api/v1beta1"
+	topology "github.com/rabbitmq/messaging-topology-operator/api/v1beta1"
 	k8s_errors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -72,6 +74,9 @@ type TransportURLReconciler struct {
 //+kubebuilder:rbac:groups=rabbitmq.openstack.org,resources=transporturls/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=rabbitmq.openstack.org,resources=transporturls/finalizers,verbs=update
 //+kubebuilder:rbac:groups=rabbitmq.com,resources=rabbitmqclusters,verbs=get;list;watch
+//+kubebuilder:rbac:groups=rabbitmq.com,resources=vhosts,verbs=get;list;watch;create;update;patch;delete;
+//+kubebuilder:rbac:groups=rabbitmq.com,resources=users,verbs=get;list;watch;create;update;patch;delete;
+//+kubebuilder:rbac:groups=rabbitmq.com,resources=permissions,verbs=get;list;watch;create;update;patch;delete;
 //+kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete;
 
 // Reconcile - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.12.2/pkg/reconcile
@@ -161,73 +166,229 @@ func (r *TransportURLReconciler) reconcileNormal(ctx context.Context, instance *
 		}
 	}
 	if !rabbitReady {
-		instance.Status.Conditions.Set(condition.FalseCondition(
-			rabbitmqv1beta1.TransportURLReadyCondition,
-			condition.RequestedReason,
-			condition.SeverityInfo,
-			rabbitmqv1beta1.TransportURLInProgressMessage))
+		setErrorCondition(instance, nil)
 		return ctrl.Result{RequeueAfter: time.Duration(10) * time.Second}, nil
 	}
 
-	// TODO(dprince): Future we may want to use vhosts for each OpenStackService instead.
-	// vhosts would likely require use of https://github.com/rabbitmq/messaging-topology-operator/ which we do not yet include
-	username, ctrlResult, err := oko_secret.GetDataFromSecret(ctx, helper, rabbit.Status.DefaultUser.SecretReference.Name, time.Duration(10)*time.Second, "username")
-	if err != nil {
-		instance.Status.Conditions.Set(condition.FalseCondition(
-			rabbitmqv1beta1.TransportURLReadyCondition,
-			condition.ErrorReason,
-			condition.SeverityWarning,
-			rabbitmqv1beta1.TransportURLReadyErrorMessage,
-			err.Error()))
-		return ctrl.Result{}, err
-	} else if (ctrlResult != ctrl.Result{}) {
-		return ctrlResult, nil
+	vhostName := "/"
+
+	if instance.Spec.Vhost != "" && instance.Spec.Vhost != "/" {
+		vhostName = vhostName + instance.Spec.Vhost
+
+		vhost := &topology.Vhost{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      instance.Spec.Vhost,
+				Namespace: instance.Namespace,
+			},
+		}
+
+		op, err := controllerutil.CreateOrUpdate(ctx, helper.GetClient(), vhost, func() error {
+			vhost.Spec.Name = instance.Spec.Vhost
+			vhost.Spec.RabbitmqClusterReference.Name = instance.Spec.RabbitmqClusterName
+
+			if instance.Spec.QuorumQueues {
+				vhost.Spec.DefaultQueueType = "quorum"
+			}
+
+			err := controllerutil.SetControllerReference(instance, vhost, r.Scheme)
+			if err != nil {
+				return err
+			}
+
+			return nil
+		})
+
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+
+		if op != controllerutil.OperationResultNone {
+			helper.GetLogger().Info(fmt.Sprintf("Vhost %s - %s", vhost.Name, op))
+		}
 	}
 
-	password, ctrlResult, err := oko_secret.GetDataFromSecret(ctx, helper, rabbit.Status.DefaultUser.SecretReference.Name, time.Duration(10)*time.Second, "password")
-	if err != nil {
-		instance.Status.Conditions.Set(condition.FalseCondition(
-			rabbitmqv1beta1.TransportURLReadyCondition,
-			condition.ErrorReason,
-			condition.SeverityWarning,
-			rabbitmqv1beta1.TransportURLReadyErrorMessage,
-			err.Error()))
-		return ctrl.Result{}, err
-	} else if (ctrlResult != ctrl.Result{}) {
-		return ctrlResult, nil
+	var username, password string
+
+	if instance.Spec.User != "" {
+		username = instance.Spec.User
+
+		// the only way to provide a desired username instead
+		// of getting a randomly-generated username is to
+		// stick it in a secret and then pass that secret via
+		// importCredentialsSecret.  By omitting the password,
+		// the user will be given a randomly-generated
+		// password
+		usernameSecret := corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "transporturl-" + instance.ObjectMeta.Name + "-username",
+				Namespace: instance.ObjectMeta.Namespace,
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"username": []byte(username),
+			},
+		}
+
+		op, err := controllerutil.CreateOrUpdate(ctx, helper.GetClient(), &usernameSecret, func() error {
+			err := controllerutil.SetControllerReference(instance, &usernameSecret, r.Scheme)
+			if err != nil {
+				return err
+			}
+
+			return nil
+		})
+
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+
+		if op != controllerutil.OperationResultNone {
+			helper.GetLogger().Info(fmt.Sprintf("Secret %s - %s", usernameSecret.ObjectMeta.Name, op))
+		}
+
+		user := topology.User{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      instance.Spec.User,
+				Namespace: instance.ObjectMeta.Namespace,
+			},
+		}
+
+		op, err = controllerutil.CreateOrUpdate(ctx, helper.GetClient(), &user, func() error {
+			user.Spec.RabbitmqClusterReference.Name = instance.Spec.RabbitmqClusterName
+			user.Spec.ImportCredentialsSecret = &corev1.LocalObjectReference{Name: usernameSecret.ObjectMeta.Name}
+			err := controllerutil.SetControllerReference(instance, &user, r.Scheme)
+			if err != nil {
+				return err
+			}
+
+			return nil
+		})
+
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+
+		if op != controllerutil.OperationResultNone {
+			helper.GetLogger().Info(fmt.Sprintf("User %s - %s", user.ObjectMeta.Name, op))
+		}
+
+		// get credential name out of user object so we can read the password from there
+		updatedUser := &topology.User{}
+		err = r.GetClient().Get(ctx, types.NamespacedName{Name: user.Name, Namespace: user.Namespace}, updatedUser)
+		if err != nil || updatedUser.Status.Credentials == nil {
+			return ctrl.Result{RequeueAfter: time.Duration(10) * time.Second}, nil
+		}
+
+		passwd, ctrlResult, err := oko_secret.GetDataFromSecret(ctx, helper, user.Status.Credentials.Name, time.Duration(10)*time.Second, "password")
+		if err != nil {
+			setErrorCondition(instance, err)
+			return ctrl.Result{}, err
+		} else if (ctrlResult != ctrl.Result{}) {
+			return ctrlResult, nil
+		}
+
+		password = passwd
+
+		permission := topology.Permission{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "transporturl-" + instance.ObjectMeta.Name,
+				Namespace: instance.ObjectMeta.Namespace,
+			},
+		}
+
+		op, err = controllerutil.CreateOrUpdate(ctx, helper.GetClient(), &permission, func() error {
+			permission.Spec.RabbitmqClusterReference.Name = instance.Spec.RabbitmqClusterName
+			permission.Spec.User = instance.Spec.User
+
+			if instance.Spec.Vhost == "" {
+				permission.Spec.Vhost = "/"
+			} else {
+				permission.Spec.Vhost = instance.Spec.Vhost
+			}
+
+			var configure, read, write string
+
+			if instance.Spec.ConfigurePermissions == "" {
+				configure = ".*"
+			} else {
+				configure = instance.Spec.ConfigurePermissions
+			}
+
+			if instance.Spec.ReadPermissions == "" {
+				read = ".*"
+			} else {
+				read = instance.Spec.ReadPermissions
+			}
+
+			if instance.Spec.WritePermissions == "" {
+				write = ".*"
+			} else {
+				write = instance.Spec.WritePermissions
+			}
+
+			permission.Spec.Permissions = topology.VhostPermissions{
+				Configure: configure,
+				Read:      read,
+				Write:     write,
+			}
+
+			err := controllerutil.SetControllerReference(instance, &permission, r.Scheme)
+			if err != nil {
+				return err
+			}
+
+			return nil
+		})
+
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+
+		if op != controllerutil.OperationResultNone {
+			helper.GetLogger().Info(fmt.Sprintf("Permission %s - %s", permission.ObjectMeta.Name, op))
+		}
+
+	} else {
+		var (
+			ctrlResult reconcile.Result
+			err        error
+		)
+
+		username, ctrlResult, err = oko_secret.GetDataFromSecret(ctx, helper, rabbit.Status.DefaultUser.SecretReference.Name, time.Duration(10)*time.Second, "username")
+		if err != nil {
+			setErrorCondition(instance, err)
+			return ctrl.Result{}, err
+		} else if (ctrlResult != ctrl.Result{}) {
+			return ctrlResult, nil
+		}
+
+		password, ctrlResult, err = oko_secret.GetDataFromSecret(ctx, helper, rabbit.Status.DefaultUser.SecretReference.Name, time.Duration(10)*time.Second, "password")
+		if err != nil {
+			setErrorCondition(instance, err)
+			return ctrl.Result{}, err
+		} else if (ctrlResult != ctrl.Result{}) {
+			return ctrlResult, nil
+		}
+
 	}
 
 	host, ctrlResult, err := oko_secret.GetDataFromSecret(ctx, helper, rabbit.Status.DefaultUser.SecretReference.Name, time.Duration(10)*time.Second, "host")
 	if err != nil {
-		instance.Status.Conditions.Set(condition.FalseCondition(
-			rabbitmqv1beta1.TransportURLReadyCondition,
-			condition.ErrorReason,
-			condition.SeverityWarning,
-			rabbitmqv1beta1.TransportURLReadyErrorMessage,
-			err.Error()))
+		setErrorCondition(instance, err)
 		return ctrl.Result{}, err
 	} else if (ctrlResult != ctrl.Result{}) {
 		return ctrlResult, nil
 	}
 
 	// Create a new secret with the transport URL for this CR
-	secret := r.createTransportURLSecret(instance, string(username), string(password), string(host))
+	secret := r.createTransportURLSecret(instance, string(username), string(password), string(host), vhostName)
 	_, op, err := oko_secret.CreateOrPatchSecret(ctx, helper, instance, secret)
 	if err != nil {
-		instance.Status.Conditions.Set(condition.FalseCondition(
-			rabbitmqv1beta1.TransportURLReadyCondition,
-			condition.ErrorReason,
-			condition.SeverityWarning,
-			rabbitmqv1beta1.TransportURLReadyErrorMessage,
-			err.Error()))
+		setErrorCondition(instance, err)
 		return ctrl.Result{}, err
 	}
 	if op != controllerutil.OperationResultNone {
-		instance.Status.Conditions.Set(condition.FalseCondition(
-			rabbitmqv1beta1.TransportURLReadyCondition,
-			condition.RequestedReason,
-			condition.SeverityInfo,
-			rabbitmqv1beta1.TransportURLReadyInitMessage))
+		setErrorCondition(instance, err)
 		return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 	}
 
@@ -241,7 +402,7 @@ func (r *TransportURLReconciler) reconcileNormal(ctx context.Context, instance *
 }
 
 // Create k8s secret with transport URL
-func (r *TransportURLReconciler) createTransportURLSecret(instance *rabbitmqv1beta1.TransportURL, username string, password string, host string) *corev1.Secret {
+func (r *TransportURLReconciler) createTransportURLSecret(instance *rabbitmqv1beta1.TransportURL, username string, password string, host string, vhost string) *corev1.Secret {
 	// Create a new secret with the transport URL for this CR
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -249,7 +410,7 @@ func (r *TransportURLReconciler) createTransportURLSecret(instance *rabbitmqv1be
 			Namespace: instance.Namespace,
 		},
 		Data: map[string][]byte{
-			"transport_url": []byte(fmt.Sprintf("rabbit://%s:%s@%s:5672", username, password, host)),
+			"transport_url": []byte(fmt.Sprintf("rabbit://%s:%s@%s:5672%s", username, password, host, vhost)),
 		},
 	}
 }
@@ -259,6 +420,9 @@ func (r *TransportURLReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&rabbitmqv1beta1.TransportURL{}).
 		Owns(&corev1.Secret{}).
+		Owns(&topology.Vhost{}).
+		Owns(&topology.User{}).
+		Owns(&topology.Permission{}).
 		Complete(r)
 }
 
@@ -273,4 +437,64 @@ func getRabbitmqCluster(
 	err := h.GetClient().Get(ctx, types.NamespacedName{Name: instance.Spec.RabbitmqClusterName, Namespace: instance.Namespace}, rabbitMqCluster)
 
 	return rabbitMqCluster, err
+}
+
+func getRabbitmqVhostString(instance *rabbitmqv1beta1.TransportURL) string {
+	if instance.Spec.Vhost == "" {
+		return "/"
+	}
+
+	return instance.Spec.Vhost
+}
+
+// GetRabbitmqVhost - get Rabbitmq Vhost object in namespace
+func getRabbitmqVhost(
+	ctx context.Context,
+	h *helper.Helper,
+	instance *rabbitmqv1beta1.TransportURL,
+) (*topology.Vhost, error) {
+	vhost := &topology.Vhost{}
+
+	err := h.GetClient().Get(ctx, types.NamespacedName{Name: getRabbitmqVhostString(instance), Namespace: instance.Namespace}, vhost)
+
+	return vhost, err
+}
+
+// GetRabbitmqUser - get Rabbitmq User object in namespace
+func getRabbitmqUser(
+	ctx context.Context,
+	h *helper.Helper,
+	instance *rabbitmqv1beta1.TransportURL,
+) (*topology.User, error) {
+	user := &topology.User{}
+
+	err := h.GetClient().Get(ctx, types.NamespacedName{Name: instance.Spec.User, Namespace: instance.Namespace}, user)
+
+	return user, err
+}
+
+// GetRabbitmqPermission - get Rabbitmq Permission object in namespace
+func getRabbitmqPermission(
+	ctx context.Context,
+	h *helper.Helper,
+	instance *rabbitmqv1beta1.TransportURL,
+) (*topology.Permission, error) {
+	permission := &topology.Permission{}
+
+	err := h.GetClient().Get(ctx, types.NamespacedName{Name: "placeholder", Namespace: instance.Namespace}, permission)
+
+	return permission, err
+}
+
+// SetErrorCondition - Update instance Conditions to reflect error state
+func setErrorCondition(
+	instance *rabbitmqv1beta1.TransportURL,
+	err error,
+) {
+	instance.Status.Conditions.Set(condition.FalseCondition(
+		rabbitmqv1beta1.TransportURLReadyCondition,
+		condition.ErrorReason,
+		condition.SeverityWarning,
+		rabbitmqv1beta1.TransportURLReadyErrorMessage,
+		err.Error()))
 }

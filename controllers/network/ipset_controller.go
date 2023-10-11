@@ -34,7 +34,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/go-logr/logr"
 	networkv1 "github.com/openstack-k8s-operators/infra-operator/apis/network/v1beta1"
@@ -147,7 +146,7 @@ func (r *IPSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *IPSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	ipsetFN := handler.EnqueueRequestsFromMapFunc(func(o client.Object) []reconcile.Request {
+	ipsetFN := handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
 		result := []reconcile.Request{}
 
 		// For each NetConfig update event get the list of all
@@ -181,7 +180,7 @@ func (r *IPSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkv1.IPSet{}).
 		Owns(&networkv1.Reservation{}).
-		Watches(&source.Kind{Type: &networkv1.NetConfig{}}, ipsetFN).
+		Watches(&networkv1.NetConfig{}, ipsetFN).
 		Complete(r)
 }
 

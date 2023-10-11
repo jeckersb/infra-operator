@@ -23,6 +23,48 @@ import (
 
 // TransportURLSpec defines the desired state of TransportURL
 type TransportURLSpec struct {
+	// +kubebuilder:validation:Optional
+
+	// Virtual host to use for the transport URL.  This will
+	// create the RabbitMQ virtual host if needed.  If omitted,
+	// uses the default "/" vhost.
+	Vhost string `json:"vhost"`
+
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=false
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:booleanSwitch"}
+
+	// Whether to default to using quorum queues on this vhost.
+	// Defaults to false.  If no Vhost is provided for this
+	// TransportURL instance, the value of QuorumQueues is
+	// ignored.
+	QuorumQueues bool `json:"quorumQueues"`
+
+	// +kubebuilder:validation:Optional
+
+	// User to use for the transport URL.  This will create the
+	// RabbitMQ user if needed.  If omitted, this will use the
+	// default RabbitMQ user.
+	User string `json:"user"`
+
+	// +kubebuilder:validation:Optional
+
+	// Write permissions for user on vhost.  If omitted, defaults
+	// to ".*" (all permissions)
+	WritePermissions string `json:"writePermissions"`
+
+	// +kubebuilder:validation:Optional
+
+	// Configure permissions for user on vhost.  If omitted,
+	// defaults to ".*" (all permissions)
+	ConfigurePermissions string `json:"configurePermissions"`
+
+	// +kubebuilder:validation:Optional
+
+	// Read permissions for user on vhost.  If omitted, defaults
+	// to ".*" (all permissions)
+	ReadPermissions string `json:"readPermissions"`
+
 	// +kubebuilder:validation:Required
 	// RabbitmqClusterName the name of the Rabbitmq cluster which to configure the transport URL
 	RabbitmqClusterName string `json:"rabbitmqClusterName"`

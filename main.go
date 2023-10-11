@@ -44,6 +44,7 @@ import (
 	networkcontrollers "github.com/openstack-k8s-operators/infra-operator/controllers/network"
 	rabbitmqcontrollers "github.com/openstack-k8s-operators/infra-operator/controllers/rabbitmq"
 	rediscontrollers "github.com/openstack-k8s-operators/infra-operator/controllers/redis"
+	topologyv1 "github.com/rabbitmq/messaging-topology-operator/api/v1beta1"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -57,6 +58,7 @@ func init() {
 
 	utilruntime.Must(rabbitmqv1beta1.AddToScheme(scheme))
 	utilruntime.Must(rabbitmqclusterv1.AddToScheme(scheme))
+	utilruntime.Must(topologyv1.AddToScheme(scheme))
 	utilruntime.Must(memcachedv1.AddToScheme(scheme))
 	utilruntime.Must(redisv1.AddToScheme(scheme))
 	utilruntime.Must(networkv1.AddToScheme(scheme))

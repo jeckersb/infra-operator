@@ -265,10 +265,46 @@ rules:
 - apiGroups:
   - rabbitmq.com
   resources:
+  - permissions
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rabbitmq.com
+  resources:
   - rabbitmqclusters
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - rabbitmq.com
+  resources:
+  - users
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rabbitmq.com
+  resources:
+  - vhosts
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - rabbitmq.openstack.org
